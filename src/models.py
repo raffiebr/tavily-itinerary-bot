@@ -1,5 +1,5 @@
 """
-Data models for Bintan Trip Planner Bot.
+Data models for Tavily Trip Planner Bot.
 """
 
 from dataclasses import dataclass, field
@@ -8,7 +8,7 @@ from enum import Enum
 
 
 class BotState(Enum):
-    """State machine states for the bot conversation flow."""
+    """Machine states for the bot conversation flow."""
     IDLE = "idle"
     SELECTING_ACTIVITIES = "selecting_activities"
     SELECTING_FOOD = "selecting_food"
@@ -32,7 +32,7 @@ class HotelInfo:
 class Activity:
     """Activity or restaurant recommendation."""
     id: str                 # Unique ID for button callbacks
-    name: str
+    name: str               # Name of the activity
     location: str           # Location description from search
     date_time: str          # Date/time info (or "Check website")
     description: str        # Brief description
@@ -50,7 +50,7 @@ class UserSession:
     activities: list[Activity] = field(default_factory=list)
     restaurants: list[Activity] = field(default_factory=list)
 
-    # User selections (list of Activity IDs)
+    # User selections
     selected_activities: list[str] = field(default_factory=list)
     selected_restaurants: list[str] = field(default_factory=list)
 
@@ -62,7 +62,7 @@ class UserSession:
     start_date: str = ""
     end_date: str = ""
 
-    # Generated itinerary (for regeneration)
+    # Generated itinerary
     current_itinerary: str = ""
 
     # Timestamps

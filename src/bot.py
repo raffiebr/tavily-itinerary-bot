@@ -147,7 +147,7 @@ async def handle_text(
     session = get_session(chat_id)
 
     logger.info(
-        f"Text from {chat_id}: {text[:50]}... (state: {session.state.value})"
+        f"Text from {chat_id}: {text[:40]}... (state: {session.state.value})"
     )
 
     if session.state == BotState.WAITING_FOR_HOTEL:
