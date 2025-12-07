@@ -12,9 +12,9 @@ class BotState(Enum):
     IDLE = "idle"
     SELECTING_ACTIVITIES = "selecting_activities"
     SELECTING_FOOD = "selecting_food"
+    SELECTING_DAYS = "selecting_days"
     WAITING_FOR_HOTEL = "waiting_for_hotel"
     CONFIRMING_HOTEL = "confirming_hotel"
-    SELECTING_DAYS = "selecting_days"
     GENERATING = "generating"
     REVIEWING_ITINERARY = "reviewing_itinerary"
 
@@ -38,6 +38,7 @@ class Activity:
     description: str        # Brief description
     url: str                # Source URL
     activity_type: str      # "activity" | "food"
+    cuisine: str = ""       # For food only
 
 
 @dataclass

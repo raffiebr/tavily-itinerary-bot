@@ -6,7 +6,7 @@ Uses Tavily for web search and Ollama/Qwen3 for LLM processing.
 """  # Noqa: E501
 
 import logging
-from telegram import Update
+from telegram import Update, Message
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -17,10 +17,15 @@ from telegram.ext import (
 )
 
 from config import TELEGRAM_BOT_TOKEN, PLACE, START_DATE, END_DATE
-from models import BotState
+from models import Activity, BotState, UserSession
 from storage import get_session, save_session, clear_session
+from services import search_activities, search_food
+from keyboards import (
+    build_activity_keyboard,
+    build_food_keyboard,
+    build_days_keyboard
+)
 
-# Configure logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -54,8 +59,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "*How it works:*\n"
         "1️⃣ I'll show activities & restaurants\n"
         "2️⃣ Tap ✅ to select what interests you\n"
-        "3️⃣ Tell me your hotel\n"
-        "4️⃣ Pick number of days\n"
+        "3️⃣ Pick number of days\n"
+        "4️⃣ Tell me your hotel\n"
         "5️⃣ Get your personalized itinerary!\n\n"
         "💡 Tip: Use /plan anytime to start over.",
         parse_mode="Markdown"
@@ -73,25 +78,18 @@ async def plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     clear_session(chat_id)
     session = get_session(chat_id)
 
-    session.state = BotState.SELECTING_ACTIVITIES
     session.start_date = START_DATE
     session.end_date = END_DATE
     save_session(session)
 
     await update.message.reply_text(
         f"🗓️ Planning your {PLACE} trip ({START_DATE} - {END_DATE})...\n\n"
-        "⏳ Searching for kid-friendly activities..."
+        "🔎 Searching for kid-friendly activities...\n"
+        "⏳ This may take a moment. Please wait..."
     )
 
-    # TODO: Phase 2 - Call services.search_activities() and send with keyboards
-    # For now, just confirm the state transition worked
-    await update.message.reply_text(
-        "✅ Bot is ready!\n\n"
-        "📋 Current state: SELECTING_ACTIVITIES\n\n"
-        "🔧 *Phase 1 Complete* - Core handlers working.\n"
-        "Next: Implement services.py and keyboards.py for full flow.",
-        parse_mode="Markdown"
-    )
+    # Delegate to step starter
+    await _start_activity_selection(update.message, session)
 
 
 async def handle_callback(
@@ -104,12 +102,11 @@ async def handle_callback(
     - sel_act_001 / des_act_001 - Select/deselect activity
     - sel_fod_001 / des_fod_001 - Select/deselect food
     - done_act / done_fod - Done selecting
-    - htl_yes / htl_no - Hotel confirmation
     - days_N - Select N days
-    - itin_regen / itin_ok - Itinerary actions
+    - htl_yes / htl_no - Hotel confirmation (Phase 3)
+    - itin_regen / itin_ok - Itinerary actions (Phase 4)
     """
     query = update.callback_query
-    await query.answer()  # Acknowledge the button press
 
     chat_id = query.message.chat_id
     data = query.data
@@ -120,14 +117,28 @@ async def handle_callback(
         f"(state: {session.state.value})"
     )
 
-    # TODO: Phase 2 - Implement callback handling for each button type
-    # For now, just log and acknowledge
-    await query.edit_message_text(
-        f"🔧 Callback received: `{data}`\n"
-        f"State: `{session.state.value}`\n\n"
-        "Full callback handling coming in Phase 2.",
-        parse_mode="Markdown"
-    )
+    # Route to appropriate handler
+    if data.startswith("sel_act_") or data.startswith("des_act_"):
+        await _handle_selection(query, session, data, "activity")
+    elif data.startswith("sel_fod_") or data.startswith("des_fod_"):
+        await _handle_selection(query, session, data, "food")
+    elif data == "done_act":
+        await _handle_done_activities(query, session)
+    elif data == "done_fod":
+        await _handle_done_food(query, session)
+    elif data.startswith("days_"):
+        await _handle_days_selection(query, session, data)
+    # elif data in ("htl_yes", "htl_no"):
+    #     await _handle_hotel_confirmation(query, session, data)  # Phase 3
+    # elif data in ("itin_regen", "itin_ok"):
+    #     await _handle_itinerary_action(query, session, data)  # Phase 4
+    else:
+        await query.edit_message_text(
+            f"🔧 Callback received: `{data}`\n"
+            f"State: `{session.state.value}`\n\n"
+            "This action will be implemented in Phase 3+.",
+            parse_mode="Markdown"
+        )
 
     save_session(session)
 
@@ -151,20 +162,34 @@ async def handle_text(
     )
 
     if session.state == BotState.WAITING_FOR_HOTEL:
-        # TODO: Phase 2 - Call services.parse_hotel() and confirm
+        # Phase 3 will implement full hotel parsing with LLM
         await update.message.reply_text(
             f"🏨 Got it! You entered: *{text}*\n\n"
-            "Hotel parsing coming in Phase 2.",
+            "✅ Hotel parsing will be implemented in Phase 3.\n\n"
+            "*Summary so far:*\n"
+            f"• Activities: {len(session.selected_activities)} selected\n"
+            f"• Restaurants: {len(session.selected_restaurants)} selected\n"
+            f"• Days: {session.num_days}\n"
+            f"• Hotel: {text}\n\n"
+            "Next steps (Phase 3+):\n"
+            "• Confirm hotel location\n"
+            "• Generate itinerary!",
             parse_mode="Markdown"
         )
+        # For now, don't transition state (Phase 3 will handle this)
     elif session.state == BotState.IDLE:
-        # User sent text but hasn't started planning
         await update.message.reply_text(
             "👋 Hi! Use /plan to start planning your trip, "
             "or /help to see available commands."
         )
+    elif session.state in (
+        BotState.SELECTING_ACTIVITIES, BotState.SELECTING_FOOD
+    ):
+        await update.message.reply_text(
+            "👆 Please use the buttons above to make selections.\n"
+            "Tap ✅ to select, then tap 'Done' when finished."
+        )
     else:
-        # Unexpected text in other states
         await update.message.reply_text(
             f"🤔 I wasn't expecting text input right now.\n"
             f"Current state: {session.state.value}\n\n"
@@ -174,10 +199,320 @@ async def handle_text(
     save_session(session)
 
 
+async def _start_activity_selection(
+    message: Message, session: UserSession
+) -> None:
+    """
+    Search for activities and display selection keyboard.
+    """
+    try:
+        activities = search_activities()
+    except Exception as e:
+        logger.error(f"Error searching activities: {e}")
+        await message.reply_text(
+            "❌ Sorry, I had trouble searching for activities.\n"
+            "Please try again with /plan."
+        )
+        return
+
+    if not activities:
+        await message.reply_text(
+            "😕 I couldn't find any activities. Please try /plan again."
+        )
+        return
+
+    # Update session
+    session.activities = activities
+    session.state = BotState.SELECTING_ACTIVITIES
+    save_session(session)
+
+    activities_text = _format_reco_message(activities, "activities")
+    keyboard = build_activity_keyboard(activities, session.selected_activities)
+
+    await message.reply_text(
+        activities_text,
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
+
+    logger.info(
+        f"Started activity selection with {len(activities)} activities"
+    )
+
+
+async def _start_food_selection(
+    message: Message, session: UserSession
+) -> None:
+    """
+    Search for restaurants and display selection keyboard.
+    """
+    try:
+        restaurants = search_food()
+    except Exception as e:
+        logger.error(f"Error searching restaurants: {e}")
+        await message.reply_text(
+            "❌ Sorry, I had trouble searching for restaurants.\n"
+            "Please try again with /plan."
+        )
+        return
+
+    if not restaurants:
+        await message.reply_text(
+            "😕 I couldn't find any restaurants. Please try /plan again."
+        )
+        return
+
+    # Update session
+    session.restaurants = restaurants
+    session.state = BotState.SELECTING_FOOD
+    save_session(session)
+
+    food_text = _format_reco_message(restaurants, "restaurants")
+    keyboard = build_food_keyboard(restaurants, session.selected_restaurants)
+
+    await message.reply_text(
+        food_text,
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
+
+    logger.info(
+        f"Started food selection with {len(restaurants)} restaurants"
+    )
+
+
+async def _start_days_selection(
+    message: Message, session: UserSession
+) -> None:
+    """
+    Prompt user to select number of days.
+    """
+    session.state = BotState.SELECTING_DAYS
+    save_session(session)
+
+    keyboard = build_days_keyboard()
+    await message.reply_text(
+        f"📅 *How many days in {PLACE}?*\n\n"
+        "Select the number of days for your itinerary:",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+    logger.info("Started days selection")
+
+
+async def _start_hotel_input(
+    message: Message, session: UserSession
+) -> None:
+    """
+    Prompt user for hotel name.
+    """
+    session.state = BotState.WAITING_FOR_HOTEL
+    save_session(session)
+
+    await message.reply_text(
+        f"🏨 *Where are you staying in {PLACE}?*\n\n"
+        "Please type your hotel name or address.\n"
+        "_(e.g., \"Bintan Lagoon Resort\" or \"Angsana Bintan\")_",
+        parse_mode="Markdown"
+    )
+
+    logger.info("Started hotel input")
+
+
+async def _handle_selection(
+    query, session: UserSession, data: str, selection_type: str
+) -> None:
+    """
+    Handle select/deselect toggle for activities or food.
+
+    Args:
+        selection_type: "activity" or "food"
+    """
+    # Determine context based on selection type
+    if selection_type == "activity":
+        expected_state = BotState.SELECTING_ACTIVITIES
+        selected_ids = session.selected_activities
+        items = session.activities
+        keyboard_builder = build_activity_keyboard
+        header_type = "activities"
+    else:
+        expected_state = BotState.SELECTING_FOOD
+        selected_ids = session.selected_restaurants
+        items = session.restaurants
+        keyboard_builder = build_food_keyboard
+        header_type = "restaurants"
+
+    if session.state != expected_state:
+        await query.answer("Please use /plan to start over.", show_alert=True)
+        return
+
+    # Parse callback: "sel_act_001" or "des_fod_001"
+    parts = data.split("_")
+    action = parts[0]  # "sel" or "des"
+    item_id = parts[2]  # "001"
+
+    if action == "sel":
+        if item_id not in selected_ids:
+            selected_ids.append(item_id)
+            await query.answer("✅ Selected!")
+    else:
+        if item_id in selected_ids:
+            selected_ids.remove(item_id)
+            await query.answer("Deselected")
+
+    # Update message in-place
+    text = _format_reco_message(items, header_type)
+    keyboard = keyboard_builder(items, selected_ids)
+
+    await query.edit_message_text(
+        text,
+        reply_markup=keyboard,
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
+
+
+async def _handle_done_activities(query, session: UserSession) -> None:
+    """
+    Handle 'Done Selecting Activities' button.
+    Show summary, then delegate to food step.
+    """
+    if session.state != BotState.SELECTING_ACTIVITIES:
+        await query.answer("Please use /plan to start over.", show_alert=True)
+        return
+    await query.answer()
+
+    count, summary = _build_selection_summary(
+        session.activities,
+        session.selected_activities
+    )
+
+    await query.edit_message_text(
+        f"✅ *Activities Selected ({count}):*\n"
+        f"{summary}\n\n"
+        "🔎 Now searching for restaurants..."
+        "⏳ This may take a moment. Please wait...",
+        parse_mode="Markdown"
+    )
+
+    # Delegate to next step
+    await _start_food_selection(query.message, session)
+
+
+async def _handle_done_food(query, session: UserSession) -> None:
+    """
+    Handle 'Done Selecting Restaurants' button
+    Show summary, then delegate to days step.
+    """
+    if session.state != BotState.SELECTING_FOOD:
+        await query.answer("Please use /plan to start over.", show_alert=True)
+        return
+    await query.answer()
+
+    count, summary = _build_selection_summary(
+        session.restaurants,
+        session.selected_restaurants
+    )
+
+    await query.edit_message_text(
+        f"✅ *Restaurants Selected ({count}):*\n"
+        f"{summary}\n\n"
+        "Great choices! Now let's finalize your trip.",
+        parse_mode="Markdown"
+    )
+
+    # Delegate to next step
+    await _start_days_selection(query.message, session)
+
+
+async def _handle_days_selection(
+    query, session: UserSession, data: str
+) -> None:
+    """
+    Handle days selection button
+    Save selection, then delegate to hotel input step.
+    """
+    if session.state != BotState.SELECTING_DAYS:
+        await query.answer("Please use /plan to start over.", show_alert=True)
+        return
+    await query.answer()
+
+    num_days = int(data.split("_")[1])
+    session.num_days = num_days
+
+    await query.edit_message_text(
+        f"✅ *Trip Duration:* {num_days} day{'s' if num_days > 1 else ''}\n\n"
+        "One last thing...",
+        parse_mode="Markdown"
+    )
+
+    # Delegate to next step
+    await _start_hotel_input(query.message, session)
+
+    logger.info(f"Chat {query.message.chat_id} selected {num_days} days")
+
+
+def _build_selection_summary(
+    items: list[Activity], selected_ids: list[str]
+) -> tuple[int, str]:
+    """Build selection summary for display."""
+    selected_names = [item.name for item in items if item.id in selected_ids]
+    summary = ", ".join(selected_names) if selected_names else "None"
+    return len(selected_ids), summary
+
+
+def _escape_markdown(text: str) -> str:
+    """Escape special Markdown characters."""
+    # Characters that need escaping in Telegram Markdown
+    special_chars = [
+        '_', '*', '[', ']', '(', ')',
+        '~', '`', '>', '#', '+', '-',
+        '=', '|', '{', '}', '.', '!'
+    ]
+    for char in special_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
+
+def _format_reco_message(items: list, item_type: str) -> str:
+    """Format the header message for activities or restaurants."""
+    if item_type == "activities":
+        header = f"🎉 *Kid-Friendly Activities in {PLACE}* 🎉\n\n"
+        header += f"Found {len(items)} activities! Tap to select:\n\n"
+
+        for i, act in enumerate(items, start=1):
+            header += (
+                f"*{i}. {_escape_markdown(act.name)}*\n"
+                f"📍 {_escape_markdown(act.location)} | 📅 {_escape_markdown(act.date_time)}\n"  # Noqa E501
+                f"_{_escape_markdown(act.description)}_\n"
+                f"🔗 {act.url}\n\n"
+            )
+
+        header += "👆 *Select activities above, then tap 'Done'*"
+    else:
+        header = f"🍽️ *Halal Dining/Cafe Options in {PLACE}* 🍽️\n\n"
+        header += f"Found {len(items)} restaurants! Tap to select:\n\n"
+
+        for i, rest in enumerate(items, start=1):
+            header += (
+                f"*{i}. {_escape_markdown(rest.name)}*\n"
+                f"📍 {_escape_markdown(rest.location)} | 🍴 {_escape_markdown(rest.cuisine)}\n"  # Noqa E501
+                f"_{_escape_markdown(rest.description)}_\n"
+                f"🔗 {rest.url}\n\n"
+            )
+
+        header += "👆 *Select restaurants above, then tap 'Done'*"
+
+    return header
+
+
 async def error_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Log errors"""
+    """Log errors."""
     logger.error(f"Update {update} caused error: {context.error}")
 
 

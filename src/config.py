@@ -15,6 +15,10 @@ PLACE = "Bintan"
 START_DATE = "17 December 2025"
 END_DATE = "20 December 2025"
 
+# === Search Settings ===
+MAX_SEARCH_RESULTS = 15   # Max results to fetch from Tavily
+MAX_RECOMMENDATIONS = 10  # Max activities/restaurants to suggest
+
 # === LLM Settings ===
 LLM_MODEL = "qwen3:8b"
 
