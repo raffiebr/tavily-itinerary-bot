@@ -49,12 +49,11 @@ class UserSession:
 
     # Recommendations sent to user
     activities: list[Activity] = field(default_factory=list)
-    restaurants: list[Activity] = field(default_factory=list)
+    eateries: list[Activity] = field(default_factory=list)
 
     # User selections
     selected_activities: list[str] = field(default_factory=list)
-    selected_restaurants: list[str] = field(default_factory=list)
-
+    selected_eateries: list[str] = field(default_factory=list)
     # Hotel info
     hotel: Optional[HotelInfo] = None
 

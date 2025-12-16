@@ -1,8 +1,7 @@
 """
 In-memory session storage for Bintan Trip Planner Bot.
 
-Note: Data is lost on bot restart. This is fine for MVP.
-Upgrade to Redis/SQLite for production persistence.
+Note: To upgrade to Redis/SQLite for production persistence.
 """
 
 from models import UserSession, BotState

@@ -45,28 +45,28 @@ def build_activity_keyboard(
 
 
 def build_food_keyboard(
-    restaurants: list[Activity],
+    eateries: list[Activity],
     selected_ids: list[str]
 ) -> InlineKeyboardMarkup:
     """
     Build keyboard for food/restaurant selection.
 
     Args:
-        restaurants: List of Activity objects (type="food") to display
-        selected_ids: List of restaurant IDs that are currently selected
+        eateries: List of Activity objects (type="food") to display
+        selected_ids: List of eatery IDs that are currently selected
 
     Returns:
-        InlineKeyboardMarkup with toggle buttons for each restaurant
+        InlineKeyboardMarkup with toggle buttons for each eatery
     """
     keyboard = []
 
-    for rest in restaurants:
-        is_selected = rest.id in selected_ids
+    for eatery in eateries:
+        is_selected = eatery.id in selected_ids
         icon = "✅" if is_selected else "⬜"
-        text = f"{icon} {rest.name}"
+        text = f"{icon} {eatery.name}"
 
         prefix = "des" if is_selected else "sel"
-        callback_data = f"{prefix}_fod_{rest.id}"
+        callback_data = f"{prefix}_fod_{eatery.id}"
 
         keyboard.append([
             InlineKeyboardButton(text, callback_data=callback_data)
@@ -74,7 +74,7 @@ def build_food_keyboard(
 
     keyboard.append([
         InlineKeyboardButton(
-            "➡️ Done Selecting Restaurants", callback_data="done_fod"
+            "➡️ Done Selecting Eateries", callback_data="done_fod"
         )
     ])
 

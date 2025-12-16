@@ -7,6 +7,7 @@ Handles external API calls:
 """
 
 import re
+import json
 import logging
 import ollama
 from tavily import TavilyClient
@@ -21,7 +22,7 @@ from config import (
     MAX_SEARCH_RESULTS,
     MAX_RECOMMENDATIONS
 )
-from models import Activity
+from models import Activity, HotelInfo
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ def search_activities() -> list[Activity]:
     Search for kid-friendly activities using Tavily and LLM.
 
     Returns:
-        List of Activity objects (8-10 activities)
+        List of Activity objects
     """
     logger.info(f"Searching for activities in {PLACE}...")
 
@@ -102,11 +103,11 @@ def search_food() -> list[Activity]:
 
     logger.info(f"Tavily returned {len(results.get('results', []))} results")
 
-    # Step 3: Use LLM to extract structured restaurants
-    restaurants = _parse_food_with_llm(food_text)
+    # Step 3: Use LLM to extract structured eateries
+    eateries = _parse_food_with_llm(food_text)
 
-    logger.info(f"Parsed {len(restaurants)} restaurants")
-    return restaurants
+    logger.info(f"Parsed {len(eateries)} eateries")
+    return eateries
 
 
 def _parse_activities_with_llm(events_text: str) -> list[Activity]:
@@ -187,7 +188,7 @@ Here are search results:
 
 {food_text}
 
-Extract the top 8-10 most relevant halal-friendly restaurants or cafes. For EACH place, output EXACTLY this format (one per line, pipe-separated):
+Extract the top {MAX_RECOMMENDATIONS - 2}-{MAX_RECOMMENDATIONS} most relevant halal-friendly restaurants or cafes. For EACH place, output EXACTLY this format (one per line, pipe-separated):
 
 NAME|LOCATION|CUISINE|DESCRIPTION|URL
 
@@ -216,7 +217,7 @@ Output ONLY the pipe-separated lines, nothing else. /no_think
         r'<think>.*?</think>', '', content, flags=re.DOTALL
     ).strip()
 
-    restaurants = []
+    eateries = []
     for idx, line in enumerate(content.split("\n"), start=1):
         line = line.strip()
         if not line or "|" not in line:
@@ -234,12 +235,111 @@ Output ONLY the pipe-separated lines, nothing else. /no_think
                 url=parts[4].strip(),
                 activity_type="food"
             )
-            restaurants.append(restaurant)
+            eateries.append(restaurant)
 
-            if len(restaurants) >= MAX_RECOMMENDATIONS:
+            if len(eateries) >= MAX_RECOMMENDATIONS:
                 break
 
-    return restaurants
+    return eateries
+
+
+def parse_hotel(user_input: str) -> HotelInfo:
+    """
+    Parse user's hotel input using LLM to extract name and area.
+
+    The LLM uses its knowledge of the destination's geography to infer
+    the area/neighborhood without hardcoded zone mappings.
+
+    Args:
+        user_input: Raw text the user typed (e.g., "bintan lagoon")
+
+    Returns:
+        HotelInfo with parsed name, area, and confidence level
+    """
+    logger.info(f"Parsing hotel input: {user_input}")
+
+    prompt = f"""
+You are a travel assistant helping identify hotels in {PLACE}.
+
+The user entered: "{user_input}"
+
+Your task:
+1. Identify the most likely hotel name from the input
+2. Determine which area/neighborhood of {PLACE} this hotel is located in
+3. Rate your confidence (high/medium/low)
+
+Use your knowledge of {PLACE}'s geography and hotels. Common areas in {PLACE} include resort areas, beach zones, and town centers - use whatever area names are most accurate for this destination.
+
+Respond ONLY with valid JSON in this exact format (no other text):
+{{"name": "Full Hotel Name", "area": "Area/Neighborhood Name", "confidence": "high"}}
+
+Rules:
+- "name": The official/common hotel name (capitalize properly)
+- "area": The general area or neighborhood (e.g., "Lagoi", "North Coast", "Town Center")
+- "confidence":
+  - "high" if you're certain about both name and area
+  - "medium" if you recognize the hotel but unsure about exact area
+  - "low" if you're guessing based on partial information
+
+Examples:
+- Input: "bintan lagoon" → {{"name": "Bintan Lagoon Resort", "area": "Lagoi", "confidence": "high"}}
+- Input: "angsana" → {{"name": "Angsana Bintan", "area": "Lagoi Bay", "confidence": "high"}}
+- Input: "some random place" → {{"name": "Some Random Place", "area": "Unknown", "confidence": "low"}}
+
+/no_think
+""".strip()  # Noqa: E501
+
+    try:
+        response = ollama.chat(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            options={"num_predict": 200}
+        )
+
+        content = response["message"]["content"].strip()
+        content = re.sub(
+            r'<think>.*?</think>', '', content, flags=re.DOTALL
+        ).strip()
+
+        json_match = re.search(r'\{[^}]+\}', content)
+        if json_match:
+            content = json_match.group()
+
+        logger.debug(f"LLM hotel response: {content}")
+
+        parsed = json.loads(content)
+
+        hotel_info = HotelInfo(
+            raw_input=user_input,
+            name=parsed.get("name", user_input.title()),
+            area=parsed.get("area", "Unknown"),
+            confidence=parsed.get("confidence", "low")
+        )
+
+        logger.info(
+            f"Parsed hotel: {hotel_info.name} in {hotel_info.area} "
+            f"(confidence: {hotel_info.confidence})"
+        )
+        return hotel_info
+
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse hotel JSON: {e}")
+        # Fallback: use input as-is with low confidence
+        return HotelInfo(
+            raw_input=user_input,
+            name=user_input.title(),
+            area="Unknown",
+            confidence="low"
+        )
+    except Exception as e:
+        logger.error(f"Error parsing hotel: {e}")
+        # Fallback: use input as-is with low confidence
+        return HotelInfo(
+            raw_input=user_input,
+            name=user_input.title(),
+            area="Unknown",
+            confidence="low"
+        )
 
 
 def format_activity_message(activity: Activity) -> str:
