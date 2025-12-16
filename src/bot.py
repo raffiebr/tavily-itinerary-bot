@@ -6,6 +6,7 @@ Uses Tavily for web search and Ollama/Qwen3 for LLM processing.
 """  # Noqa: E501
 
 import logging
+import textwrap
 from telegram import Update, Message
 from telegram.ext import (
     Application,
@@ -16,15 +17,28 @@ from telegram.ext import (
     ContextTypes
 )
 
-from config import TELEGRAM_BOT_TOKEN, PLACE, START_DATE, END_DATE
+from config import (
+    TELEGRAM_BOT_TOKEN,
+    PLACE,
+    START_DATE,
+    END_DATE,
+    TELEGRAM_MAX_LEN,
+    CHUNK_LEN
+)
 from models import Activity, BotState, UserSession
 from storage import get_session, save_session, clear_session
-from services import search_activities, search_food, parse_hotel
+from services import (
+    search_activities,
+    search_food,
+    parse_hotel,
+    generate_itinerary
+)
 from keyboards import (
     build_activity_keyboard,
     build_food_keyboard,
     build_days_keyboard,
-    build_confirm_keyboard
+    build_confirm_keyboard,
+    build_itinerary_keyboard
 )
 
 logging.basicConfig(
@@ -132,15 +146,10 @@ async def handle_callback(
         await _handle_days_selection(query, session, data)
     elif data in ("htl_yes", "htl_no"):
         await _handle_hotel_confirmation(query, session, data)
-    # elif data in ("itin_regen", "itin_ok"):
-    #     await _handle_itinerary_action(query, session, data)  # Phase 4
+    elif data in ("itin_regen", "itin_ok"):
+        await _handle_itinerary_action(query, session, data)
     else:
-        await query.edit_message_text(
-            f"🔧 Callback received: `{data}`\n"
-            f"State: `{session.state.value}`\n\n"
-            "This action will be implemented in Phase 3+.",
-            parse_mode="Markdown"
-        )
+        await query.answer("Unknown action", show_alert=True)
 
     save_session(session)
 
@@ -218,6 +227,11 @@ async def handle_text(
         await update.message.reply_text(
             "👆 Please use the buttons above to confirm your hotel,\n"
             "or tap 'No' to re-enter."
+        )
+    elif session.state == BotState.REVIEWING_ITINERARY:
+        await update.message.reply_text(
+            "👆 Please use the buttons above to accept or regenerate\n"
+            "your itinerary."
         )
     else:
         await update.message.reply_text(
@@ -350,6 +364,68 @@ async def _start_hotel_input(
     )
 
     logger.info("Started hotel input")
+
+
+async def _start_itinerary_generation(
+    message: Message, session: UserSession
+) -> None:
+    """
+    Generate itinerary and display with review keyboard.
+    """
+    session.state = BotState.GENERATING
+    save_session(session)
+
+    status_msg = await message.reply_text(
+        "⏳ *Generating your personalized itinerary...*\n\n"
+        "I'm considering:\n"
+        f"• {len(session.selected_activities)} activities you selected\n"
+        f"• {len(session.selected_eateries)} eateries you selected\n"
+        f"• Your hotel location ({session.hotel.area if session.hotel else 'Unknown'})\n"  # Noqa E501
+        f"• Travel times between locations\n\n"
+        "_This may take a moment. LLM is thinking..._",
+        parse_mode="Markdown"
+    )
+
+    try:
+        selected_activities = [
+            act for act in session.activities
+            if act.id in session.selected_activities
+        ]
+        selected_eateries = [
+            eat for eat in session.eateries
+            if eat.id in session.selected_eateries
+        ]
+        itinerary = generate_itinerary(
+            selected_activities=selected_activities,
+            selected_eateries=selected_eateries,
+            hotel_name=session.hotel.name if session.hotel else "Hotel",
+            hotel_area=session.hotel.area if session.hotel else "Unknown",
+            num_days=session.num_days
+        )
+        session.current_itinerary = itinerary
+        session.state = BotState.REVIEWING_ITINERARY
+        save_session(session)
+
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass  # Ignore if we can't delete
+
+        # Send itinerary (with chunking if needed)
+        await _send_itinerary(message, itinerary)
+
+        logger.info("Itinerary generated and sent successfully")
+
+    except Exception as e:
+        logger.error(f"Error generating itinerary: {e}")
+        session.state = BotState.CONFIRMING_HOTEL
+        save_session(session)
+
+        await message.reply_text(
+            "❌ Sorry, I had trouble generating your itinerary.\n"
+            "Please try confirming your hotel again or "
+            "use /plan to start over."
+        )
 
 
 async def _handle_selection(
@@ -514,16 +590,16 @@ async def _handle_hotel_confirmation(
             f"• 📅 Duration: {session.num_days} days\n"
             f"• 🎯 Activities: {act_count} selected\n"
             f"• 🍽️ Eateries: {rest_count} selected\n"
-            f"• 🏨 Hotel: {hotel_name}\n\n"
-            "⏳ *Generating your personalized itinerary...*\n\n"
-            "_This will be implemented in Phase 4._",
+            f"• 🏨 Hotel: {hotel_name}",
             parse_mode="Markdown"
         )
 
         logger.info(
-            f"Hotel confirmed: {hotel_name}. "
-            f"Ready for itinerary generation (Phase 4)."
+            f"Hotel confirmed: {hotel_name}. Starting itinerary generation."
         )
+
+        # Delegate to itinerary generation
+        await _start_itinerary_generation(query.message, session)
 
     else:
         session.hotel = None
@@ -538,6 +614,49 @@ async def _handle_hotel_confirmation(
         )
 
         logger.info("User rejected hotel - asking again")
+
+
+async def _handle_itinerary_action(
+    query, session: UserSession, data: str
+) -> None:
+    """
+    Handle itinerary action buttons (itin_regen / itin_ok).
+
+    - itin_regen: Regenerate the itinerary
+    - itin_ok: Accept and complete the flow
+    """
+    if session.state != BotState.REVIEWING_ITINERARY:
+        await query.answer("Please use /plan to start over.", show_alert=True)
+        return
+    await query.answer()
+
+    if data == "itin_regen":
+        await query.edit_message_text(
+            "🔄 *Regenerating your itinerary...*\n\n"
+            "_Creating a fresh plan for your trip..._",
+            parse_mode="Markdown"
+        )
+
+        logger.info("User requested itinerary regeneration")
+
+        await _start_itinerary_generation(query.message, session)
+
+    else:
+        session.state = BotState.IDLE
+        save_session(session)
+
+        await query.edit_message_text(
+            "🎉 *Perfect! Your itinerary is saved.*\n\n"
+            f"Have a wonderful trip to {PLACE}! 🏝️\n\n"
+            "💡 *Tips:*\n"
+            "• Screenshot or copy the itinerary above\n"
+            "• Use /plan anytime to create a new trip\n"
+            "• Use /help if you need assistance\n\n"
+            "_Safe travels! 👋_",
+            parse_mode="Markdown"
+        )
+
+        logger.info("User accepted itinerary - flow complete")
 
 
 def _build_selection_summary(
@@ -592,6 +711,77 @@ def _format_reco_message(items: list, item_type: str) -> str:
         header += "👆 *Select eateries above, then tap 'Done'*"
 
     return header
+
+
+async def _send_itinerary(message: Message, itinerary: str) -> None:
+    """
+    Send itinerary to chat, chunking if necessary.
+    The last chunk includes the action keyboard.
+    """
+    keyboard = build_itinerary_keyboard()
+
+    if len(itinerary) <= TELEGRAM_MAX_LEN - 100:
+        # Send as single message with keyboard
+        await message.reply_text(
+            itinerary,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+    else:
+        # Split into chunks
+        chunks = _split_into_chunks(itinerary)
+
+        # Send all but the last chunk without keyboard
+        for i, chunk in enumerate(chunks[:-1]):
+            await message.reply_text(
+                chunk,
+                disable_web_page_preview=True
+            )
+            logger.info(f"Sent itinerary chunk {i+1}/{len(chunks)}")
+
+        # Send last chunk with keyboard
+        await message.reply_text(
+            chunks[-1],
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+        logger.info(f"Sent final itinerary chunk {len(chunks)}/{len(chunks)}")
+
+
+def _split_into_chunks(text: str, max_len: int = CHUNK_LEN) -> list[str]:
+    """
+    Split text into chunks not exceeding max_len,
+    preferably at paragraph breaks.
+    """
+    if len(text) <= max_len:
+        return [text]
+
+    paragraphs = text.split("\n\n")
+    chunks = []
+    current = ""
+
+    for p in paragraphs:
+        candidate = (current + "\n\n" + p).strip() if current else p
+        if len(candidate) <= max_len:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+
+            if len(p) > max_len:
+                wrapped = textwrap.wrap(
+                    p,
+                    width=max_len,
+                    replace_whitespace=False,
+                    drop_whitespace=False
+                )
+                chunks.extend(wrapped[:-1])
+                current = wrapped[-1] if wrapped else ""
+            else:
+                current = p
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 async def error_handler(

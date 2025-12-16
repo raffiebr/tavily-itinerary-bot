@@ -4,7 +4,7 @@ In-memory session storage for Bintan Trip Planner Bot.
 Note: To upgrade to Redis/SQLite for production persistence.
 """
 
-from models import UserSession, BotState
+from models import UserSession
 
 
 _sessions: dict[int, UserSession] = {}

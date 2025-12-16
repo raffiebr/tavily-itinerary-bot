@@ -372,3 +372,200 @@ def format_activities_list(activities: list[Activity]) -> str:
     for i, act in enumerate(activities, start=1):
         lines.append(f"{i}. {format_activity_message(act)}")
     return "\n\n".join(lines)
+
+
+def generate_itinerary(
+    selected_activities: list[Activity],
+    selected_eateries: list[Activity],
+    hotel_name: str,
+    hotel_area: str,
+    num_days: int
+) -> str:
+    """
+    Generate daily itinerary using LLM.
+
+    Args:
+        selected_activities: List of selected Activity objects
+        selected_eateries: List of selected eatery Activity objects
+        hotel_name: Name of the hotel
+        hotel_area: Area/neighborhood of the hotel
+        num_days: Number of days for the trip
+
+    Returns:
+        Formatted itinerary string
+    """
+    logger.info(
+        f"Generating {num_days}-day itinerary with "
+        f"{len(selected_activities)} activities and "
+        f"{len(selected_eateries)} eateries"
+    )
+
+    activities_text = ""
+    for i, act in enumerate(selected_activities, start=1):
+        activities_text += (
+            f"{i}. {act.name}\n"
+            f"   Location: {act.location}\n"
+            f"   Hours: {act.date_time}\n"
+            f"   Description: {act.description}\n\n"
+        )
+
+    if not activities_text:
+        activities_text = (
+            "No specific activities selected - I will suggest popular "
+            f"kid-friendly options in {PLACE}."
+        )
+
+    eateries_text = ""
+    for i, eat in enumerate(selected_eateries, start=1):
+        eateries_text += (
+            f"{i}. {eat.name}\n"
+            f"   Location: {eat.location}\n"
+            f"   Cuisine: {eat.cuisine}\n"
+            f"   Description: {eat.description}\n\n"
+        )
+
+    if not eateries_text:
+        eateries_text = (
+            "No specific eateries selected - I will suggest halal-friendly "
+            "options near activities."
+        )
+
+    prompt = f"""
+You are a family travel planner creating a detailed {num_days}-day itinerary for {PLACE}.
+
+HOTEL INFORMATION:
+- Hotel: {hotel_name}
+- Area: {hotel_area}
+
+SELECTED ACTIVITIES:
+{activities_text}
+
+SELECTED EATERIES:
+{eateries_text}
+
+IMPORTANT SCHEDULING RULES:
+
+**Day 1 (Arrival Day) - Special Schedule:**
+- ~12:00 PM: Arrive at hotel, drop bags
+- 12:30-2:00 PM: Lunch at nearby eatery
+- 2:00-3:00 PM: Explore nearby area / wait for check-in
+- 3:00 PM: Hotel check-in
+- 3:00-4:30 PM: Rest and settle in
+- 4:30-6:00 PM: Beach/pool at hotel
+- 6:00-7:00 PM: Freshen up
+- 7:30 PM+: Dinner
+
+**Day 2 onwards (Normal Schedule):**
+- 8:00-9:30 AM: Breakfast at hotel
+- 9:30-10:00 AM: Prepare and travel to activity
+- 10:00 AM-1:00 PM: Morning activity
+- 1:00-2:00 PM: Lunch (MUST be near morning activity location!)
+- 2:00-2:30 PM: Travel back to hotel
+- 2:30-4:30 PM: Nap time (2 hours - critical for young kids!)
+- 4:30-6:00 PM: Beach/pool at hotel
+- 6:00-7:00 PM: Freshen up
+- 7:30 PM+: Dinner
+
+GENERATION RULES:
+1. If more activities selected than available days (excluding Day 1), pick the best subset
+2. Cluster activities geographically to minimize travel time
+3. Match lunch spots to morning activity locations - don't send family far!
+4. Include transport method AND estimated cost for each trip
+5. Use "Day 1", "Day 2" format - NOT specific dates
+6. Keep family-friendly pace - no rushing between locations
+7. Each day should feel relaxed, not packed
+
+FORMAT YOUR RESPONSE EXACTLY LIKE THIS (use plain text, no markdown):
+
+================================================
+DAY 1 - Arrival Day
+================================================
+
+12:00 PM | Arrive at Hotel
+   {hotel_name}
+   Drop bags at reception
+
+12:30-2:00 PM | Lunch
+   [Restaurant Name]
+   Location: [Area]
+   Cuisine: [Type]
+   Transport: [How to get there from hotel + cost]
+
+2:00-3:00 PM | Explore Nearby
+   [Suggestion based on hotel area]
+
+3:00 PM | Hotel Check-in
+   {hotel_name}
+   Settle into your room
+
+3:00-4:30 PM | Rest Time
+   Unpack and relax after travel
+
+4:30-6:00 PM | Beach/Pool
+   {hotel_name} facilities
+
+6:00-7:00 PM | Freshen Up
+
+7:30 PM | Dinner
+   [Restaurant Name]
+   Location: [Area]
+   Transport: [Method + cost]
+
+================================================
+DAY 2
+================================================
+
+8:00-9:30 AM | Breakfast
+   {hotel_name}
+
+9:45 AM | Travel to Activity
+   Transport: [Method + estimated cost]
+
+10:00 AM-1:00 PM | [Activity Name]
+   Location: [Area]
+   Tip: [Useful tip for families]
+
+1:00-2:00 PM | Lunch
+   [Restaurant NEAR the activity!]
+   Location: [Area near activity]
+
+2:00-2:30 PM | Travel Back
+   Transport: [Method + cost]
+
+2:30-4:30 PM | Nap Time
+   Important rest for young kids!
+
+4:30-6:00 PM | Beach/Pool
+   {hotel_name} facilities
+
+6:00-7:00 PM | Freshen Up
+
+7:30 PM | Dinner
+   [Restaurant Name]
+   Location: [Area]
+
+... continue for remaining days ...
+
+Keep response under 2800 characters total. Be concise but complete.
+
+/no_think
+""".strip()  # Noqa: E501
+
+    try:
+        response = ollama.chat(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            options={"num_predict": 2500}
+        )
+
+        content = response["message"]["content"].strip()
+        content = re.sub(
+            r'<think>.*?</think>', '', content, flags=re.DOTALL
+        ).strip()
+
+        logger.info(f"Generated itinerary: {len(content)} chars")
+        return content
+
+    except Exception as e:
+        logger.error(f"Error generating itinerary: {e}")
+        raise
