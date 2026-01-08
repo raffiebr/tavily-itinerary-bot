@@ -5,7 +5,8 @@ Handles external API calls:
 - Tavily for web search (activities, food)
 - Ollama/Qwen3 for LLM processing
 
-Includes comprehensive error handling and multi-user vote support.
+Phase 6: Search functions now accept dynamic max_results parameter
+based on trip length.
 """
 
 import re
@@ -22,8 +23,7 @@ from config import (
     PREFERENCES,
     LLM_MODEL,
     MAX_SEARCH_RESULTS,
-    MAX_RECOMMENDATIONS,
-    DEFAULT_SELECTION_COUNT
+    get_default_selection_count
 )
 from models import Activity, HotelInfo, UserSession
 
@@ -49,9 +49,12 @@ class ServiceError(Exception):
 
 # === Search Functions ===
 
-def search_activities() -> list[Activity]:
+def search_activities(max_results: int = 8) -> list[Activity]:
     """
     Search for kid-friendly activities using Tavily and LLM.
+
+    Args:
+        max_results: Number of activities to return
 
     Returns:
         List of Activity objects
@@ -60,7 +63,7 @@ def search_activities() -> list[Activity]:
         TavilySearchError: If Tavily API call fails
         LLMError: If LLM parsing fails
     """
-    logger.info(f"Searching for activities in {PLACE}...")
+    logger.info(f"Searching for activities in {PLACE} (max_results={max_results})...")
 
     try:
         client = TavilyClient(api_key=TAVILY_API_KEY)
@@ -100,7 +103,7 @@ def search_activities() -> list[Activity]:
 
     # Parse with LLM
     try:
-        activities = _parse_activities_with_llm(events_text)
+        activities = _parse_activities_with_llm(events_text, max_results)
     except Exception as e:
         logger.error(f"LLM parsing failed for activities: {e}")
         raise LLMError(
@@ -111,9 +114,12 @@ def search_activities() -> list[Activity]:
     return activities
 
 
-def search_food() -> list[Activity]:
+def search_food(max_results: int = 8) -> list[Activity]:
     """
     Search for halal dining options using Tavily and LLM.
+    
+    Args:
+        max_results: Number of eateries to return (dynamic based on trip length)
 
     Returns:
         List of Activity objects
@@ -122,7 +128,7 @@ def search_food() -> list[Activity]:
         TavilySearchError: If Tavily API call fails
         LLMError: If LLM parsing fails
     """
-    logger.info(f"Searching for halal food in {PLACE}...")
+    logger.info(f"Searching for halal food in {PLACE} (max_results={max_results})...")
 
     try:
         client = TavilyClient(api_key=TAVILY_API_KEY)
@@ -161,7 +167,7 @@ def search_food() -> list[Activity]:
 
     # Parse with LLM
     try:
-        eateries = _parse_food_with_llm(food_text)
+        eateries = _parse_food_with_llm(food_text, max_results)
     except Exception as e:
         logger.error(f"LLM parsing failed for food: {e}")
         raise LLMError(
@@ -172,9 +178,13 @@ def search_food() -> list[Activity]:
     return eateries
 
 
-def _parse_activities_with_llm(events_text: str) -> list[Activity]:
+def _parse_activities_with_llm(events_text: str, max_results: int) -> list[Activity]:
     """
     Use LLM to parse raw search results into structured Activity objects.
+    
+    Args:
+        events_text: Raw search results text
+        max_results: Number of activities to extract
 
     Raises:
         LLMError: If LLM call or parsing fails
@@ -188,7 +198,7 @@ Here are search results:
 
 Preferences: {", ".join(PREFERENCES)}
 
-Extract the top {MAX_RECOMMENDATIONS - 2}-{MAX_RECOMMENDATIONS} most relevant activities. For EACH activity, output EXACTLY this format (one per line, pipe-separated):
+Extract the top {max_results} most relevant activities. For EACH activity, output EXACTLY this format (one per line, pipe-separated):
 
 NAME|LOCATION|DATE_TIME|DESCRIPTION|URL
 
@@ -240,15 +250,19 @@ Output ONLY the pipe-separated lines, nothing else. /no_think
             )
             activities.append(activity)
 
-            if len(activities) >= MAX_RECOMMENDATIONS:
+            if len(activities) >= max_results:
                 break
 
     return activities
 
 
-def _parse_food_with_llm(food_text: str) -> list[Activity]:
+def _parse_food_with_llm(food_text: str, max_results: int) -> list[Activity]:
     """
     Use LLM to parse search results into structured eatery objects.
+    
+    Args:
+        food_text: Raw search results text
+        max_results: Number of eateries to extract
 
     Raises:
         LLMError: If LLM call or parsing fails
@@ -260,7 +274,7 @@ Here are search results:
 
 {food_text}
 
-Extract the top {MAX_RECOMMENDATIONS - 2}-{MAX_RECOMMENDATIONS} most relevant halal-friendly restaurants or cafes. Include at least 1 cafe if it exists in the search results. For EACH place, output EXACTLY this format (one per line, pipe-separated):
+Extract the top {max_results} most relevant halal-friendly restaurants or cafes. Include at least 1 cafe if it exists in the search results. For EACH place, output EXACTLY this format (one per line, pipe-separated):
 
 NAME|LOCATION|CUISINE|DESCRIPTION|URL
 
@@ -313,7 +327,7 @@ Output ONLY the pipe-separated lines, nothing else. /no_think
             )
             eateries.append(restaurant)
 
-            if len(eateries) >= MAX_RECOMMENDATIONS:
+            if len(eateries) >= max_results:
                 break
 
     return eateries
@@ -428,7 +442,8 @@ def apply_default_selections(
     """
     Apply default selections if user(s) made no selections.
 
-    Selects the top N items from the available list.
+    Selects the top N items from the available list, where N is
+    dynamically calculated based on trip length.
 
     Args:
         session: UserSession to update
@@ -449,8 +464,10 @@ def apply_default_selections(
     if selected:
         return 0, []
 
-    # Select top N items
-    count = min(DEFAULT_SELECTION_COUNT, len(items))
+    # Get dynamic default count based on trip length
+    count = get_default_selection_count(session.num_days, selection_type)
+    count = min(count, len(items))  # Don't exceed available items
+    
     default_names = []
 
     for item in items[:count]:

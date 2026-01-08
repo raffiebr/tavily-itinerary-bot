@@ -369,8 +369,8 @@ async def _start_activity_selection(
 
     await message.reply_text(
         f"🔎 Searching for kid-friendly activities...\n"
-        f"_(Looking for {activity_count} options based on "
-        f"your {session.num_days}-day trip)_"
+        f"(Looking for {activity_count} options based on "
+        f"your {session.num_days}-day trip)"
     )
 
     try:
@@ -453,8 +453,8 @@ async def _start_food_selection(
 
     await message.reply_text(
         f"🔎 Now searching for eateries...\n"
-        f"_(Looking for {food_count} options for your "
-        f"{session.num_days} days of meals)_"
+        f"(Looking for {food_count} options for your "
+        f"{session.num_days} days of meals)"
     )
 
     try:

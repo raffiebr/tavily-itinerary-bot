@@ -1,0 +1,36 @@
+stateDiagram-v2
+    [*] --> Idle
+    
+    Idle --> WaitingForHotel: /plan command
+
+    WaitingForHotel --> ConfirmingHotel: User types<br/>hotel name
+    
+    ConfirmingHotel --> WaitingForHotel: ❌ No
+    ConfirmingHotel --> SelectingDays: ✅ Yes
+    
+    SelectingDays --> SelectingActivities: User picks<br/>1-5 days
+    
+    note right of SelectingActivities
+        Dynamic count based on days:
+        1 day → 4 activities
+        3 days → 6 activities
+        5 days → 10 activities
+    end note
+    
+    SelectingActivities --> SelectingActivities: User taps to<br/>select/deselect
+    SelectingActivities --> SelectingFood: "Done Selecting"
+    
+    note right of SelectingFood
+        Dynamic count based on days:
+        1 day → 4 eateries
+        3 days → 8 eateries
+        5 days → 10 eateries
+    end note
+    
+    SelectingFood --> SelectingFood: User taps to<br/>select/deselect
+    SelectingFood --> Generating: "Done Selecting"
+    
+    Generating --> ReviewingItinerary: LLM generates<br/>& bot sends plan
+    
+    ReviewingItinerary --> Generating: 🔄 Regenerate
+    ReviewingItinerary --> Idle: ✅ Looks good!
