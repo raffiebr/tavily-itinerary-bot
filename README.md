@@ -6,23 +6,36 @@ An interactive Telegram bot that helps families plan kid-friendly getaways. Buil
 
 - 🎯 **Interactive Planning** - Select activities and restaurants via inline buttons
 - 🏨 **Smart Hotel Parsing** - Type your hotel name, LLM identifies location and area
-- 🗓️ **Multi-day Itineraries** - Generate 1-5 day plans with realistic scheduling
+- 🗓️ **Dynamic Recommendations** - Number of options scales with your trip length
 - 👶 **Kid-friendly Focus** - Built-in nap time, relaxed pacing, family activities
 - 🚐 **Transport Suggestions** - Includes travel times and transport options
 - 🍽️ **Halal Dining** - Filters for halal-friendly restaurants
+- 👥 **Group Voting** - Multiple family members can vote in group chats
 
 ## How It Works
 
 ```
-/plan → Select Activities → Select Food → Enter Hotel → Pick Days → Get Itinerary
+/plan → Hotel → Days → Activities → Food → Itinerary
 ```
 
 1. User triggers `/plan` command
-2. Bot searches for activities and food via Tavily
-3. User selects preferences using ✅ buttons
-4. User enters hotel name (LLM parses and confirms)
-5. User picks number of days
+2. User enters hotel name (LLM parses and confirms)
+3. User picks number of days (1-5)
+4. Bot searches for activities and food via Tavily (count based on trip length)
+5. User(s) vote on preferences using ✅ buttons
 6. LLM generates personalized itinerary with transport info
+
+## Dynamic Recommendations
+
+The number of options shown is based on your trip length:
+
+| Days | Activities | Eateries |
+|------|------------|----------|
+| 1    | 4          | 4        |
+| 2    | 6          | 6        |
+| 3    | 6          | 8        |
+| 4    | 8          | 10       |
+| 5    | 10         | 10       |
 
 ## Daily Schedule Template
 
@@ -108,7 +121,7 @@ No other changes needed - the LLM handles geography automatically!
 ```
 trip-planner-bot/
 ├── bot.py              # Entry point + all handlers
-├── config.py           # Settings & env vars
+├── config.py           # Settings, env vars, dynamic count functions
 ├── models.py           # BotState + dataclasses
 ├── storage.py          # Session persistence (in-memory)
 ├── keyboards.py        # Inline keyboard builders
@@ -136,22 +149,73 @@ plan - Start planning your trip
 help - Show available commands and how to use the bot
 ```
 
+### Group Chat Setup
+
+By default, bots only see commands addressed to them in groups. To fix:
+
+1. Open @BotFather
+2. Send `/mybots` → Select your bot
+3. **Bot Settings** → **Group Privacy** → **Turn off**
+4. Remove and re-add bot to the group
+
+## Conversation Flow
+
+```
+User: /plan
+
+Bot: "Let's start with some basics!"
+     "🏨 Where are you staying in Bintan?"
+
+User: "bintan lagoon"
+
+Bot: "🔍 Got it! Bintan Lagoon Resort (Lagoi). Is this correct?"
+     [✅ Yes] [❌ No]
+
+User: [✅ Yes]
+
+Bot: "📅 How many days in Bintan?"
+     [1 Day] [2 Days] [3 Days] [4 Days] [5 Days]
+
+User: [3 Days]
+
+Bot: "✅ 3 days - I'll show you ~6 activities, ~8 eateries"
+     "🔎 Searching for activities..."
+
+Bot: "🎉 Kid-Friendly Activities (for your 3-day trip)"
+     [⬜ Activity 1] [⬜ Activity 2] ...
+     [➡️ Done]
+
+User: [selects] [Done]
+
+Bot: "🍽️ Halal Dining Options (for your 3 days of meals)"
+     [⬜ Restaurant 1] ...
+     [➡️ Done]
+
+User: [selects] [Done]
+
+Bot: "⏳ Generating your itinerary..."
+
+Bot: [Full multi-day itinerary with transport info]
+     [🔄 Regenerate] [✅ Looks good!]
+```
+
 ## Tech Stack
 
 - **[python-telegram-bot](https://python-telegram-bot.org/)** - Telegram Bot API wrapper
 - **[Tavily](https://tavily.com/)** - Web search API for activities/restaurants
 - **[Ollama](https://ollama.ai/)** - Local LLM runtime
-- **[Qwen3:8b](https://ollama.ai/library/qwen3)** - LLM for hotel parsing & itinerary generation
+- **[Qwen3:8b](https://ollama.ai/library/qwen3)** - LLM for parsing & itinerary generation
 
 ## Architecture Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
+| Flow order | Hotel → Days → Activities → Food | Collect simple inputs first, then show dynamic recommendations |
+| Recommendation count | Dynamic based on days | 2-day trip doesn't need 10 options |
 | Session storage | In-memory | Simple for MVP, upgrade to Redis later |
 | LLM | Local Ollama | Free, private, no API costs |
 | Geography | LLM-inferred | No hardcoded zones, works for any destination |
-| Selection | Collective | All group members can select activities |
-| Itinerary edits | Regenerate only | Simple UX for MVP |
+| Selection | Multi-user voting | All group members can vote, items sorted by vote count |
 
 ## Limitations
 
@@ -162,16 +226,11 @@ help - Show available commands and how to use the bot
 
 ## Future Enhancements
 
-- [ ] Scheduled recommendations (push every 2 days)
 - [ ] Persistent storage (Redis/SQLite)
 - [ ] Cloud hosting (Railway/Render)
 - [ ] Google Maps API for accurate transport times
 - [ ] Multi-destination support in single config
-
-## Related Files
-
-- [Architecture Doc](./bintan_bot_architecture.md) - Detailed architecture & code patterns
-- [Conversation Flow](./conversation_flow.mermaid) - State diagram
+- [ ] Scheduled recommendations push
 
 ## License
 
